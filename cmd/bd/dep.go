@@ -330,20 +330,21 @@ Examples:
 			Type:        dt,
 		}
 
-		if err := fromStore.AddDependency(ctx, dep, actor); err != nil {
+		// Wire --no-cycle-check into the pre-insert cycle check. The plain
+		// fromStore.AddDependency runs bd's recursive-CTE cycle check
+		// unconditionally; only AddDependencyWithOptions honors SkipCycleCheck.
+		// Mirror the bulk path: transact handles the auto-commit for all modes,
+		// so no separate isEmbeddedMode() commit is needed.
+		noCycleCheck, _ := cmd.Flags().GetBool("no-cycle-check")
+		if err := transact(ctx, fromStore, fmt.Sprintf("bd: dep add (auto-commit) by %s", actor), func(tx storage.Transaction) error {
+			return tx.AddDependencyWithOptions(ctx, dep, actor, storage.DependencyAddOptions{SkipCycleCheck: noCycleCheck})
+		}); err != nil {
 			FatalErrorRespectJSON("%v", err)
 		}
 
-		// Check for cycles after adding dependency (skipped with --no-cycle-check)
-		noCycleCheck, _ := cmd.Flags().GetBool("no-cycle-check")
+		// Post-add cycle warning (also skipped with --no-cycle-check)
 		if !noCycleCheck {
 			warnIfCyclesExist(fromStore)
-		}
-
-		if isEmbeddedMode() && fromStore != nil {
-			if err := fromStore.Commit(ctx, fmt.Sprintf("bd: dep add (auto-commit) by %s", actor)); err != nil && !isDoltNothingToCommit(err) {
-				FatalErrorRespectJSON("failed to commit: %v", err)
-			}
 		}
 
 		if jsonOutput {
